@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=64", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "catboost-utility"
@@ -28,14 +28,12 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = [
-    "common*",
-    "vif_catboost*",
-    "boruta_catboost*",
+    "catboost_utility*",
 ]
 exclude = ["*.tests*"]
 
 [tool.pytest.ini_options]
 testpaths = [
-    "vif_catboost/tests",
-    "boruta_catboost/tests",
+    "catboost_utility/vif_catboost/tests",
+    "catboost_utility/boruta_catboost/tests",
 ]

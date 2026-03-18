@@ -1,6 +1,7 @@
 # Internal docs — not for publishing
 PLAN.md
 enhancement.md
+test.ipynb
 
 # Python
 __pycache__/

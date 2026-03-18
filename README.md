@@ -612,4 +612,3 @@ Planned post-v0.1.0 modules include:
 - interaction discovery
 - OOF meta-feature generation
 
-See `PLAN.md` for detailed design roadmap.
