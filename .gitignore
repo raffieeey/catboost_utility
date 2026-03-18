@@ -1,0 +1,24 @@
+# Internal docs — not for publishing
+PLAN.md
+enhancement.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Pytest
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "catboost-utility"
+version = "0.1.0"
+description = "CatBoost-based feature selection utilities with native categorical support (VIF, Boruta, and more)"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "catboost>=1.0",
+    "pandas>=1.3",
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "joblib>=1.0",
+    "scikit-learn>=1.0",
+]
+
+[project.optional-dependencies]
+progress = ["tqdm>=4.60"]
+dev = [
+    "pytest>=7.0",
+    "tqdm>=4.60",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "common*",
+    "vif_catboost*",
+    "boruta_catboost*",
+]
+exclude = ["*.tests*"]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "vif_catboost/tests",
+    "boruta_catboost/tests",
+]
