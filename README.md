@@ -593,10 +593,16 @@ Use when your goal is identifying all relevant predictors for a specific target.
 
 ## Testing
 
-Run module tests:
+Run tests from the repository root:
 
 ```bash
-python -m pytest vif_catboost/tests/ boruta_catboost/tests/ -v --tb=short
+python -m pytest -v --tb=short
+```
+
+To target the module test directories explicitly:
+
+```bash
+python -m pytest catboost_utility/vif_catboost/tests catboost_utility/boruta_catboost/tests -v --tb=short
 ```
 
 ---
