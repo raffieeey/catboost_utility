@@ -146,7 +146,55 @@ boruta.fit(X, y)
 print(boruta.get_feature_names_out())
 print(boruta.decision_log_.head())
 ```
+### Result
 
+```python
+
+   feature       vif  r_squared  is_categorical  clamped
+0  segment  3.279003   0.695029            True    False
+1     city  2.228692   0.551306            True    False
+2   income  2.117880   0.527830           False    False
+3      age  1.916274   0.478154           False    False
+
+# other features explain about 69.5% of 'segment' feature
+
+['segment', 'city', 'income', 'age']
+[]
+
+# since our vif threshold is 5, so none is removed []
+
+##### Boruta
+['age', 'income', 'segment']
+
+# city is not in this list, which means it was not confirmed. From here, it could have ended up rejected or still tentative see below.
+
+   iteration  iteration_seed  feature  shadow_max  hits  p_upper  p_lower  \
+0          1              43      age    1.251390     1     0.50      1.0   
+1          1              43   income    1.251390     1     0.50      1.0   
+2          1              43     city    1.251390     0     1.00      0.5   
+3          1              43  segment    1.251390     1     0.50      1.0   
+4          2              44      age    3.350493     2     0.25      1.0   
+
+   adj_p_upper  adj_p_lower     status  
+0          1.0          1.0  tentative  
+1          1.0          1.0  tentative  
+2          1.0          1.0  tentative  
+3          1.0          1.0  tentative  
+4          1.0          1.0  tentative
+
+# shadow_max is the strongest importance among the shuffled “shadow” features in that iteration.
+# hits is how many times a real feature beat shadow_max so far.
+# p_upper tests “is this feature better than random often enough to confirm it?”
+# p_lower tests “is this feature weak enough often enough to reject it?”
+# adj_p_upper and adj_p_lower are those p-values after multiple-testing correction
+# status is the current state after that iteration.
+
+### STATUS LIST ###
+# tentative: the feature is still undecided. It has not yet shown strong enough evidence to be confirmed, and not weak enough evidence to be rejected. This is common in early iterations.
+# confirmed: the feature beat the shadow features often enough that its adjusted upper-tail p-value fell below alpha, so the code treats it as genuinely useful. Confirmed features are returned by get_feature_names_out() and included in support_.
+# rejected: the feature failed badly enough against the shadow features that its adjusted lower-tail p-value fell below alpha, so the code treats it as no better than random noise. Rejected features are excluded from the selected set.
+
+```
 ---
 
 ## Module 1: `CatBoostVIF`
