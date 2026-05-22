@@ -2,6 +2,8 @@
 
 CatBoost-based feature selection utilities for mixed-type tabular data.
 
+> **Note:** This package is not part of the official CatBoost project. It uses CatBoost as a modeling backend / scientific utility for feature-selection methods on mixed-type tabular data.
+
 This project focuses on one core problem: most classical feature-selection tools assume all columns are numeric, while many real datasets have important categorical fields. CatBoost can model categorical predictors directly, so this library uses CatBoost as the engine for:
 
 - VIF-style multicollinearity analysis that works on mixed numeric + categorical data.
