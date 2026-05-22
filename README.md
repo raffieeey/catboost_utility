@@ -85,7 +85,15 @@ In short:
 
 ## Installation
 
-### Local editable install
+### Install from PyPI
+
+```bash
+pip install catboost-utility
+```
+
+### Local editable install (development)
+
+Use this if you are developing the package locally:
 
 ```bash
 pip install -e .
