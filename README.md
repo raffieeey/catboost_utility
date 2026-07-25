@@ -1,35 +1,595 @@
 # catboost-utility
 
-CatBoost-based feature selection for mixed-type tabular data.
+CatBoost-based feature selection utilities for mixed-type tabular data.
 
-> **Note:** This package is not part of the official CatBoost project. It uses CatBoost as a modeling backend for feature-selection methods on mixed numeric + categorical data.
+> **Note:** This package is not part of the official CatBoost project. It uses CatBoost as a modeling backend / scientific utility for feature-selection methods on mixed-type tabular data.
 
-## Why
+This project focuses on one core problem: most classical feature-selection tools assume all columns are numeric, while many real datasets have important categorical fields. CatBoost can model categorical predictors directly, so this library uses CatBoost as the engine for:
 
-Most feature-selection tools assume all columns are numeric. Real data has categorical fields. Forcing one-hot or ordinal encoding before selection distorts relationships, inflates dimensionality, and makes pipelines harder to audit.
+- Boruta-style all-relevant feature selection with statistical decision rules.
+- VIF-style multicollinearity analysis that works on mixed numeric + categorical data.
+- RFE (Recursive Feature Elimination) with CatBoost importance ranking.
 
-CatBoost handles categoricals natively. This library uses CatBoost as the engine for three selection methods — VIF, Boruta, and RFE — so you never encode before selecting.
+Current release: `v0.2.0`
+
+Implemented modules:
+
+- `BorutaCatBoost`
+- `CatBoostVIF`
+- `CatBoostRFE`
+
+---
+
+## Why this exists
+
+Traditional VIF and Boruta implementations commonly rely on linear models or sklearn random forests. In mixed-type data, that usually forces manual encoding before selection, which can:
+
+- distort relationships (for example, one-hot expansion changes geometry),
+- inject arbitrary ordinality (label encoding),
+- make interpretation harder.
+
+`catboost-utility` keeps categorical handling native through CatBoost and adds reproducibility, input validation, and audit-friendly outputs.
+
+---
+
+## Why use this instead of a standard sklearn-only approach?
+
+Short answer: use this when your feature selection must work well on mixed numeric + categorical data without forcing manual encoding first.
+
+### What existing sklearn workflows usually do
+
+- For VIF-like analysis, people often use linear-model tooling (or statsmodels VIF), which assumes numeric inputs.
+- For Boruta-style selection, common implementations are tree-based wrappers around sklearn estimators, which also usually expect encoded categoricals.
+- So teams typically add preprocessing (one-hot/ordinal/target encoding) before feature selection.
+
+### Why that can be a problem
+
+- Encoding can change the geometry of the problem:
+  - one-hot can inflate dimensionality and split one concept into many sparse columns,
+  - ordinal encoding can inject fake ordering.
+- Feature-importance and collinearity signals can become encoding-dependent.
+- Pipelines become harder to audit because preprocessing and selection interact.
+
+### What this library changes technically
+
+1. Native categorical handling via CatBoost:
+- No forced one-hot/ordinal conversion before selection.
+- Same modeling backend for numeric and categorical predictors.
+
+2. Boruta with explicit statistical controls:
+- Shadow-feature comparisons are done each iteration.
+- Multiple-testing correction is built in (`bonferroni` or `bh`).
+- Decision logs, seeds, and histories are retained for auditability.
+
+3. VIF adapted for mixed data:
+- Numeric targets use regression `R^2`.
+- Categorical targets use McFadden-like pseudo-`R^2` from log-loss.
+- Out-of-fold/holdout scoring avoids overly optimistic in-sample scores.
+
+4. RFE with native categorical support:
+- sklearn-compatible API (fit, transform, fit_transform, get_support, get_feature_names_out).
+- Int/float n_features_to_select and step for flexible elimination schedules.
+- Per-iteration importance history with within-iteration rankings.
+
+5. Reproducibility and robustness defaults:
+- Centralized validation, deterministic seeding, edge-case warnings, and standardized result artifacts.
+
+### When sklearn-only is still the right choice
+
+Use standard sklearn tooling if:
+
+- your dataset is already fully numeric and cleanly preprocessed,
+- you need a lightweight baseline quickly,
+- you do not need categorical-native selection behavior,
+- or you prioritize ecosystem familiarity over mixed-type rigor.
+
+In short:
+
+- If your selection quality depends on handling raw categorical columns correctly, this library is usually the better fit.
+- If your problem is purely numeric and simple, sklearn-only workflows may be sufficient and faster to operationalize.
+
+---
 
 ## Installation
+
+### Install from PyPI
 
 ```bash
 pip install catboost-utility
 ```
 
-For development:
+### Local editable install (development)
+
+Use this if you are developing the package locally:
 
 ```bash
 pip install -e .
 ```
 
-Requires Python 3.9+. Core deps: catboost, pandas, numpy, scipy, joblib, scikit-learn.
+### Dependencies
 
-## Quick start
+Core dependencies:
+
+- `catboost`
+- `pandas`
+- `numpy`
+- `scipy`
+- `joblib`
+- `scikit-learn`
+
+Optional:
+
+- `tqdm` (progress utilities planned for future expansion)
+
+---
+
+## Quick Start
+
+The recommended workflow is: **Boruta → VIF → RFE**. Boruta removes clearly irrelevant features first (target-aware), VIF reduces redundancy among what remains (unsupervised), and RFE selects the top-N features for your final model.
 
 ```python
 import pandas as pd
 from catboost_utility.boruta_catboost import BorutaCatBoost
 from catboost_utility.vif_catboost import CatBoostVIF
+from catboost_utility.rfe_catboost import CatBoostRFE
+
+# Example mixed-type data
+X = pd.DataFrame(
+    {
+        "age": [34, 27, 52, 41, 29, 38],
+        "income": [70_000, 42_000, 110_000, 87_000, 50_000, 76_000],
+        "city": ["A", "B", "A", "C", "B", "A"],
+        "segment": ["retail", "retail", "enterprise", "enterprise", "retail", "enterprise"],
+    }
+)
+
+y = pd.Series([0, 0, 1, 1, 0, 1], name="target")
+
+# 1) Boruta — remove irrelevant features
+boruta = BorutaCatBoost(
+    cat_features=["city", "segment"],
+    max_iter=30,
+    correction_method="bonferroni",
+    random_state=42,
+)
+boruta.fit(X, y)
+X_sel = boruta.transform(X)
+print("Boruta selected:", boruta.get_feature_names_out())
+
+# 2) VIF — remove redundant features
+vif = CatBoostVIF(cat_features=["city", "segment"], threshold=5.0, random_state=42)
+vif_result = vif.fit_eliminate(X_sel)
+X_sel = X_sel[vif_result.selected_features]
+print("VIF retained:", vif_result.selected_features)
+
+# 3) RFE — select top-N features
+rfe = CatBoostRFE(n_features_to_select=2, cat_features=["city", "segment"], random_state=42)
+rfe.fit(X_sel, y)
+X_final = rfe.transform(X_sel)
+print("RFE selected:", rfe.get_feature_names_out())
+print("Final features:", list(X_final.columns))
+```
+
+---
+
+## Module 1: `BorutaCatBoost`
+
+### What it does
+
+`BorutaCatBoost` is an all-relevant feature selection method:
+
+1. Builds shuffled shadow copies of all features.
+2. Trains CatBoost on original + shadow features.
+3. Compares each original feature against the strongest shadow.
+4. Tracks iterative "hits" and applies statistical testing.
+5. Labels each feature as:
+   - Confirmed
+   - Rejected
+   - Tentative
+
+### Statistical decision logic
+
+For each feature after `i` iterations:
+
+- Let `hits` = number of times feature importance > `shadow_max`.
+- Under null hypothesis (feature no better than random), hits follow approximately:
+  - `Binomial(n=i, p=0.5)`
+- Two one-sided tests are computed:
+  - Upper tail (`greater`) for confirmation.
+  - Lower tail (`less`) for rejection.
+
+Then p-values are corrected for multiple testing.
+
+### Multiple-testing correction options
+
+#### 1) Bonferroni (`correction_method="bonferroni"`)
+
+- Adjusted p-value:
+  - `p_adj = min(p * m, 1.0)`
+- `m` = number of currently undecided features.
+- Very conservative. Strong control of family-wise error.
+
+Use when false positives are very costly and you prefer stricter feature confirmation.
+
+#### 2) Benjamini-Hochberg (`correction_method="bh"`)
+
+BH controls False Discovery Rate (FDR), not Family-Wise Error Rate (FWER).
+
+Formal target:
+
+- If `R` = number of rejected hypotheses and `V` = number of false rejections,
+- then FDR is `E[V / max(R, 1)]`.
+
+So BH controls the expected false-discovery proportion among selected features, while Bonferroni controls the probability of even one false positive.
+
+### BH algorithm (adjusted p-value form used in this project)
+
+Given `m` hypotheses and raw p-values `p1..pm`:
+
+1. Sort p-values:
+- `p_(1) <= p_(2) <= ... <= p_(m)` where `(i)` means rank position.
+
+2. Initial rank-scaled values:
+- `q_raw(i) = p_(i) * m / i`
+
+3. Enforce monotone non-decreasing adjusted values (from right to left):
+- `q(i) = min(q_raw(i), q(i+1))`
+
+4. Map adjusted values back to original feature order.
+
+5. Decision:
+- reject hypothesis `H_j` if `q_j < alpha`.
+
+This is equivalent to the classic BH step-up threshold rule:
+
+- find largest `k` such that `p_(k) <= (k/m) * alpha`,
+- reject all hypotheses with rank `<= k`.
+
+### Worked numeric example
+
+Suppose one Boruta decision pass has `m = 5` undecided features and upper-tail p-values:
+
+- `[0.003, 0.011, 0.019, 0.041, 0.20]`
+
+Compute rank-scaled values:
+
+- rank 1: `0.003 * 5/1 = 0.015`
+- rank 2: `0.011 * 5/2 = 0.0275`
+- rank 3: `0.019 * 5/3 = 0.0317`
+- rank 4: `0.041 * 5/4 = 0.05125`
+- rank 5: `0.20 * 5/5 = 0.20`
+
+Monotone correction from right to left gives adjusted values:
+
+- `[0.015, 0.0275, 0.0317, 0.05125, 0.20]` (already monotone here)
+
+If `alpha = 0.05`, first three are rejected (`< 0.05`) and rank 4+ are not.
+
+Interpretation:
+
+- among the confirmed set, expected false-discovery proportion is controlled at 5% (under BH assumptions), instead of trying to eliminate every single false positive as Bonferroni does.
+
+### How BH is used inside `BorutaCatBoost`
+
+At each iteration:
+
+1. For each undecided feature, compute two p-values from Binomial tests:
+- upper-tail (`greater`) for potential confirmation,
+- lower-tail (`less`) for potential rejection.
+
+2. Apply BH separately to each p-value family (upper and lower arrays).
+
+3. Feature status update:
+- Confirmed if adjusted upper-tail p-value `< alpha`.
+- Rejected if adjusted lower-tail p-value `< alpha`.
+- Tentative otherwise.
+
+Why separate families:
+
+- confirmation and rejection are distinct directional hypotheses.
+- this avoids mixing opposite-tail evidence into one correction pass.
+
+### Practical guidance: BH vs Bonferroni
+
+#### What options are available right now?
+
+Current `correction_method` options in this project:
+
+- `bonferroni`
+- `bh` (Benjamini-Hochberg)
+
+There are no other correction methods implemented in `v0.2.0`.
+
+#### How to choose between them
+
+`bonferroni`:
+
+- controls FWER (probability of at least one false positive),
+- most conservative,
+- lower false-positive risk, higher false-negative risk.
+
+Use when:
+
+- feature confirmation must be very strict,
+- false-positive features are expensive (regulatory, scientific, or high-stakes settings),
+- feature count is moderate and you can tolerate missing weak-but-real signals.
+
+`bh`:
+
+- controls FDR (expected false discovery proportion among selected),
+- less conservative, more powerful,
+- higher recall, but may allow some controlled false positives.
+
+Use when:
+
+- you have wider feature sets,
+- discovery/recall matters,
+- you can tolerate some false positives in exchange for better sensitivity.
+
+#### Why only these two in v0.2.0?
+
+They provide a strong practical pair:
+
+- Bonferroni for strictness.
+- BH for power.
+
+This keeps behavior understandable while covering the two common operating modes in feature selection.
+
+#### Other methods you may know (not implemented yet)
+
+- Holm-Bonferroni: step-down FWER control, less conservative than Bonferroni.
+- Benjamini-Yekutieli: FDR control under broader dependence, more conservative than BH.
+- Storey q-value variants: estimate proportion of true nulls for more power.
+
+These are good candidates for future versions if you need finer control.
+
+### Statistical assumptions and caveats
+
+- BH is exact under independent tests and remains valid under many positive-dependence settings (common in feature-selection contexts, though not guaranteed in every dataset).
+- Boruta feature tests are not perfectly independent because features can be correlated, so BH should be interpreted as pragmatic control rather than a strict guarantee under all dependence structures.
+- In very small `m` (few undecided features), BH and Bonferroni often behave similarly.
+
+### Other important decision rules
+
+- Strict hit rule: `importance > shadow_max` (ties are not hits).
+- Early stopping: if no tentative features remain for `patience` consecutive iterations, stop before `max_iter`.
+- Iteration seed is logged for reproducibility (`random_state + iteration_index`).
+
+### Main API
+
+#### Constructor
+
+```python
+BorutaCatBoost(
+    cat_features=None,
+    max_iter=100,
+    alpha=0.05,
+    correction_method="bonferroni",  # or "bh"
+    importance_type="PredictionValuesChange",
+    patience=5,
+    task_type="classification",      # or "regression"
+    catboost_params=None,
+    random_state=42,
+)
+```
+
+#### Methods
+
+- `fit(X, y) -> self`
+- `transform(X) -> pd.DataFrame`
+- `fit_transform(X, y) -> pd.DataFrame`
+- `get_support(indices=False) -> np.ndarray`
+- `get_feature_names_out() -> list[str]`
+- `get_selection_result() -> SelectionResult`
+
+### Fitted attributes
+
+- `support_`: bool mask for confirmed features
+- `support_weak_`: bool mask for tentative features
+- `ranking_`: 1 confirmed, 2 tentative, 3 rejected
+- `importance_history_`: per-iteration feature importances and hit indicators
+- `decision_log_`: per-iteration p-values, adjusted p-values, shadow threshold, status
+
+---
+
+## Module 2: `CatBoostVIF`
+
+### What it does
+
+`CatBoostVIF` estimates feature-level collinearity by predicting each feature from all other features and converting prediction quality into a VIF-like score.
+
+Classical VIF for feature `X_j`:
+
+`VIF_j = 1 / (1 - R_j^2)`
+
+where `R_j^2` comes from regressing `X_j` on all remaining predictors.
+
+### Adaptation used here
+
+For each feature `X_j`:
+
+- If `X_j` is numeric, fit `CatBoostRegressor` and compute standard `R^2`.
+- If `X_j` is categorical, fit `CatBoostClassifier` and compute a McFadden-like pseudo-`R^2` from log-loss:
+
+`R2_mcfadden = 1 - (LL_model / LL_null)`
+
+Where:
+
+- `LL_model`: log-loss of CatBoost predictions.
+- `LL_null`: log-loss of a baseline that predicts class frequencies.
+
+### Detailed VIF algorithm (how this implementation computes it)
+
+For each column `X_j`:
+
+1. Set `y = X_j`, predictors = `X \ {X_j}`.
+2. Resolve categorical predictor indices for CatBoost.
+3. If `X_j` is categorical and unique classes exceed `max_target_cardinality`, skip and return `NaN`.
+4. Drop rows where target `y` is null (CatBoost target cannot be null).
+5. Train a model and compute validation-based goodness:
+- numeric target -> CatBoostRegressor -> `R^2`
+- categorical target -> CatBoostClassifier -> McFadden-like pseudo-`R^2`
+6. Clamp `R^2` into valid VIF range:
+- `R^2 < 0` -> `0`
+- `R^2 >= 1` -> `1 - eps`
+7. Compute `VIF = 1 / (1 - R^2)`.
+8. Repeat for all columns; optionally run elimination loop by dropping max-VIF feature until threshold is satisfied.
+
+### Scoring method options in VIF (`scoring_method`)
+
+#### 1) `oof` (out-of-fold cross-validation)
+
+- More statistically stable for small/medium datasets.
+- Lower optimism bias vs single split.
+- More computationally expensive.
+- Better when feature decisions are high impact.
+
+#### 2) `holdout` (single train/validation split)
+
+- Faster.
+- More variance due dependence on one split.
+- Better for large datasets where speed matters and split instability is less severe.
+
+Decision rule:
+
+- Use `oof` when selection accuracy/stability matters more than speed.
+- Use `holdout` for rapid iteration or very large data.
+
+### Threshold strategy (`threshold`)
+
+Common practical ranges:
+
+- around `2.5`: strict, aggressively removes collinearity.
+- around `5.0`: balanced default for many applied settings.
+- around `10.0`: conservative; keeps more features.
+
+Interpretation caveat:
+
+- This VIF is model-based (CatBoost), not linear OLS VIF. Use thresholds as heuristics, not absolute statistical law.
+
+### What VIF captures and what it does not
+
+VIF is a redundancy diagnostic, not a direct relevance-to-target test.
+
+- High VIF means a feature is predictable from other features.
+- It does not mean the feature is useless for your final target task.
+- Best practice: combine VIF (redundancy reduction) with target-aware selection (for example Boruta).
+
+### Why this is robust
+
+- Uses out-of-fold (`scoring_method="oof"`) or holdout validation, not in-sample fit.
+- Explicit `R^2` clamping:
+  - `< 0` becomes `0`
+  - `>= 1` becomes `1 - eps`
+- Handles categorical targets with excessive cardinality by returning `NaN` and warning.
+- Handles elimination edge case when all VIF values are `NaN`.
+
+### Main API
+
+#### Constructor
+
+```python
+CatBoostVIF(
+    cat_features=None,
+    threshold=5.0,
+    scoring_method="oof",
+    cv_folds=5,
+    holdout_fraction=0.2,
+    n_jobs=1,
+    max_target_cardinality=50,
+    catboost_params=None,
+    random_state=42,
+)
+```
+
+#### Methods
+
+- `fit(X) -> pd.DataFrame`
+- `fit_eliminate(X) -> SelectionResult`
+- `get_retained_features() -> list[str]`
+
+### Output schema
+
+`fit(X)` returns a DataFrame with:
+
+- `feature`
+- `vif`
+- `r_squared`
+- `is_categorical`
+- `clamped`
+
+`fit_eliminate(X)` returns `SelectionResult`:
+
+- `selected_features`
+- `rejected_features`
+- `tentative_features` (empty for VIF)
+- `metrics` (final VIF table)
+- `config` (includes threshold, scoring settings, elimination history)
+- `random_state`
+
+---
+
+## Module 3: `CatBoostRFE`
+
+### What it does
+
+`CatBoostRFE` performs Recursive Feature Elimination using CatBoost feature importances. It repeatedly trains a CatBoost model, ranks features by importance, removes the least important, and continues until the desired number of features remains.
+
+### Algorithm
+
+1. Start with all features.
+2. Train CatBoost on current feature set.
+3. Rank features by importance.
+4. Remove the `step` least-important features.
+5. Repeat until `n_features_to_select` features remain.
+6. Selected features get rank 1; eliminated features get higher ranks (earlier elimination = higher rank).
+
+### Why use this instead of sklearn RFE?
+
+- sklearn's RFE requires an estimator with a `coef_` or `feature_importances_` attribute. CatBoost's native importance types work directly.
+- No manual encoding needed for categorical features — CatBoost handles them natively through its Pool API.
+- Works for both classification and regression tasks.
+- Supports float `step` (remove a fraction of remaining features per iteration) and float `n_features_to_select` (select a percentage of features).
+- Per-iteration importance history with within-iteration rankings for full auditability.
+
+### Main API
+
+#### Constructor
+
+```python
+CatBoostRFE(
+    n_features_to_select=None,  # int, float (0-1), or None (defaults to n_features // 2)
+    step=1,                      # int or float (0-1)
+    cat_features=None,
+    importance_type="PredictionValuesChange",
+    task_type="classification",  # or "regression"
+    catboost_params=None,
+    random_state=42,
+)
+```
+
+#### Methods
+
+- `fit(X, y) -> self`
+- `transform(X) -> pd.DataFrame`
+- `fit_transform(X, y) -> pd.DataFrame`
+- `get_support(indices=False) -> np.ndarray`
+- `get_feature_names_out() -> list[str]`
+- `get_selection_result() -> SelectionResult`
+
+### Fitted attributes
+
+- `support_`: bool mask for selected features
+- `ranking_`: 1 = selected, higher = eliminated earlier
+- `feature_names_`: list of all feature names
+- `n_features_`: total feature count
+- `n_features_selected_`: number of selected features
+- `importance_history_`: per-iteration feature importances, within-iteration rank, and selected indicator
+
+### Quick example
+
+```python
+import pandas as pd
 from catboost_utility.rfe_catboost import CatBoostRFE
 
 X = pd.DataFrame({
@@ -40,104 +600,148 @@ X = pd.DataFrame({
 })
 y = pd.Series([0, 0, 1, 1, 0, 1], name="target")
 
-# 1) Boruta — remove irrelevant features
-boruta = BorutaCatBoost(cat_features=["city", "segment"], max_iter=30, random_state=42)
-boruta.fit(X, y)
-X_sel = boruta.transform(X)
-
-# 2) VIF — remove redundant features
-vif = CatBoostVIF(cat_features=["city", "segment"], threshold=5.0, random_state=42)
-vif_result = vif.fit_eliminate(X_sel)
-X_sel = X_sel[vif_result.selected_features]
-
-# 3) RFE — select top-N features
-rfe = CatBoostRFE(n_features_to_select=2, cat_features=["city", "segment"], random_state=42)
-rfe.fit(X_sel, y)
-X_final = rfe.transform(X_sel)
-
-print("Final features:", list(X_final.columns))
-```
-
-## Modules
-
-### `BorutaCatBoost` — all-relevant selection
-
-Creates shuffled shadow copies of all features, trains CatBoost on originals + shadows, and uses binomial tests to decide which features are genuinely better than random.
-
-```python
-boruta = BorutaCatBoost(
-    cat_features=["city"],
-    max_iter=100,
-    alpha=0.05,
-    correction_method="bonferroni",  # or "bh"
-    task_type="classification",
-    random_state=42,
-)
-boruta.fit(X, y)
-print(boruta.get_feature_names_out())   # confirmed features
-print(boruta.decision_log_.head())      # per-iteration decisions
-```
-
-**Decision rules:** Each feature gets a status — `confirmed` (beats shadows often enough), `rejected` (worse than noise), or `tentative` (undecided). P-values are corrected for multiple testing via Bonferroni (FWER) or Benjamini-Hochberg (FDR). Early stopping when no tentative features remain for `patience` iterations.
-
-**Fitted attributes:** `support_`, `support_weak_`, `ranking_`, `importance_history_`, `decision_log_`.
-
-### `CatBoostVIF` — collinearity analysis
-
-Predicts each feature from all others using CatBoost and converts prediction quality into a VIF score. Numeric targets use regression R²; categorical targets use McFadden pseudo-R² from log-loss.
-
-```python
-vif = CatBoostVIF(cat_features=["city"], threshold=5.0, scoring_method="oof", random_state=42)
-
-# Get VIF table
-vif_table = vif.fit(X)
-
-# Iteratively drop highest-VIF features until all below threshold
-result = vif.fit_eliminate(X)
-print(result.selected_features, result.rejected_features)
-```
-
-**Key params:** `threshold` (default 5.0), `scoring_method` (`"oof"` or `"holdout"`), `cv_folds`, `n_jobs`.
-
-**Output:** `fit()` returns a DataFrame with columns `feature`, `vif`, `r_squared`, `is_categorical`, `clamped`. `fit_eliminate()` returns a `SelectionResult` with elimination history in `config`.
-
-### `CatBoostRFE` — recursive feature elimination
-
-Repeatedly trains CatBoost, ranks features by importance, removes the least important, and continues until `n_features_to_select` remain.
-
-```python
 rfe = CatBoostRFE(
-    n_features_to_select=2,     # int, float (0-1), or None (defaults to n_features // 2)
-    step=1,                      # int or float (0-1)
-    cat_features=["city"],
-    task_type="classification",
+    n_features_to_select=2,
+    cat_features=["city", "segment"],
     random_state=42,
 )
 rfe.fit(X, y)
 print(rfe.get_feature_names_out())
-print(rfe.ranking_)              # 1 = selected, higher = eliminated earlier
-print(rfe.importance_history_)    # per-iteration rankings
+print(rfe.ranking_)
+print(rfe.importance_history_.head())
 ```
 
-**Edge cases:** If `n_features_to_select >= total features`, all features return with rank 1. Float `step` removes that fraction of remaining features per iteration. Null targets are dropped with a warning.
+### Edge-case behavior
 
-## Practical workflow
+- If `n_features_to_select >= total features`, all features are returned with rank 1.
+- If `n_features_to_select` is `None`, defaults to `max(1, n_features // 2)`.
+- Float `step` removes that fraction of remaining features per iteration (minimum 1).
+- Rows with null targets are dropped with a warning.
+- Categorical features are auto-detected from dtype (object, string, category, bool) or specified explicitly via `cat_features`.
 
-1. **Boruta** — remove clearly irrelevant features (target-aware)
-2. **VIF** — reduce redundancy among retained features (unsupervised)
-3. **RFE** — select top-N features for your final model (target-aware)
-4. Train your final model on the reduced set
+---
+
+## Shared infrastructure (`common/`)
+
+### Validation (`validation.py`)
+
+- enforces DataFrame / Series types,
+- checks duplicate column names,
+- rejects unsupported dtypes (datetime, timedelta, complex),
+- warns for constant columns and high-null columns,
+- validates target shape and basic target viability.
+
+### Categorical utilities (`cat_feature_utils.py`)
+
+- accepts `cat_features` as `None`, list of names, or list of indices,
+- canonicalizes internally to names,
+- resolves CatBoost indices safely after column changes.
+
+### Result artifact (`result.py`)
+
+`SelectionResult` is a common output object with:
+
+- selected / rejected / tentative features,
+- metrics DataFrame,
+- config snapshot,
+- random state.
+
+---
+
+## Reproducibility
+
+- `random_state` is propagated through splits/shuffling/model seeds.
+- Boruta stores `iteration_seed` in histories/logs.
+- Determinism is validated with tests, but full bitwise reproducibility is not guaranteed for all hardware/threading modes.
+
+---
+
+## Robustness behavior and edge cases
+
+### `BorutaCatBoost`
+
+- Rows with null targets are dropped with warning.
+- `transform()` checks that required training columns are present.
+- Supports both classification and regression tasks.
+
+### `CatBoostVIF`
+
+- High-cardinality categorical targets can be skipped (returns `NaN` VIF).
+- If all VIFs are `NaN` during elimination, process stops with warning.
+- Handles classification fold constraints by falling back to holdout when stratified OOF is not feasible.
+- Catches common model failures (`ValueError`, `CatBoostError`) and returns `NaN` for the affected feature.
+
+### `CatBoostRFE`
+
+- Rows with null targets are dropped with warning.
+- `transform()` checks that required training columns are present.
+- Supports both classification and regression tasks.
+- Accepts numpy integer types (`np.int64`, etc.) for `n_features_to_select` and `step`.
+- Handles misaligned indices between X and y during null-target filtering.
+
+---
+
+## Performance notes
+
+- VIF is computationally expensive: one model per feature per iteration.
+- OOF scoring is more robust than holdout but slower.
+- Boruta runtime scales with `max_iter * n_features`.
+- RFE runtime scales with the number of elimination rounds (at most `n_features` iterations).
+- Start with smaller CatBoost settings for exploration:
+
+```python
+catboost_params = {"iterations": 50, "depth": 4, "learning_rate": 0.1}
+```
+
+Then increase iterations/depth for final selection stability.
+
+---
+
+## Practical guidance
+
+### When to use `BorutaCatBoost`
+
+Use when your goal is identifying all relevant predictors for a specific target.
+
+### When to use `CatBoostVIF`
+
+Use when your goal is reducing redundancy / multicollinearity among predictors.
+
+### When to use `CatBoostRFE`
+
+Use when you need to select a specific number of top-N features for your final model.
+
+### Typical workflow
+
+1. Use `BorutaCatBoost` to remove clearly irrelevant features.
+2. Use `CatBoostVIF.fit_eliminate()` to reduce redundancy among retained features.
+3. Use `CatBoostRFE` to select the top-N features for your final model.
+4. Train your final predictive model on the reduced set.
+
+---
 
 ## Testing
+
+Run tests from the repository root:
 
 ```bash
 python -m pytest -v --tb=short
 ```
 
+To target the module test directories explicitly:
+
+```bash
+python -m pytest catboost_utility/boruta_catboost/tests catboost_utility/vif_catboost/tests catboost_utility/rfe_catboost/tests -v --tb=short
+```
+
+---
+
 ## Roadmap
 
-- Permutation importance utilities
-- Stability selection
-- Calibration and threshold optimization
-- Interaction discovery
+Planned post-v0.2.0 modules include:
+
+- permutation importance utilities
+- stability selection
+- calibration and threshold optimization
+- interaction discovery
 - OOF meta-feature generation
