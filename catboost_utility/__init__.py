@@ -1,6 +1,6 @@
 """CatBoost Feature Selection & ML Utilities.
 
-Native categorical feature support for VIF, Boruta, and more.
+Native categorical feature support for VIF, Boruta, RFE, and more.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -8,13 +8,15 @@ This project focuses on one core problem: most classical feature-selection tools
 
 - VIF-style multicollinearity analysis that works on mixed numeric + categorical data.
 - Boruta-style all-relevant feature selection with statistical decision rules.
+- RFE (Recursive Feature Elimination) with CatBoost importance ranking.
 
-Current release: `v0.1.0`
+Current release: `v0.2.0`
 
 Implemented modules:
 
 - `CatBoostVIF`
 - `BorutaCatBoost`
+- `CatBoostRFE`
 
 ---
 
@@ -564,6 +566,96 @@ BorutaCatBoost(
 
 ---
 
+## Module 3: `CatBoostRFE`
+
+### What it does
+
+`CatBoostRFE` performs Recursive Feature Elimination using CatBoost feature importances. It repeatedly trains a CatBoost model, ranks features by importance, removes the least important, and continues until the desired number of features remains.
+
+### Algorithm
+
+1. Start with all features.
+2. Train CatBoost on current feature set.
+3. Rank features by importance.
+4. Remove the `step` least-important features.
+5. Repeat until `n_features_to_select` features remain.
+6. Selected features get rank 1; eliminated features get higher ranks (earlier elimination = higher rank).
+
+### Why use this instead of sklearn RFE?
+
+- sklearn's RFE requires an estimator with a `coef_` or `feature_importances_` attribute. CatBoost's native importance types work directly.
+- No manual encoding needed for categorical features — CatBoost handles them natively through its Pool API.
+- Works for both classification and regression tasks.
+
+### Main API
+
+#### Constructor
+
+```python
+CatBoostRFE(
+    n_features_to_select=None,  # int, float (0-1), or None (defaults to n_features // 2)
+    step=1,                      # int or float (0-1)
+    cat_features=None,
+    importance_type="PredictionValuesChange",
+    task_type="classification",  # or "regression"
+    catboost_params=None,
+    random_state=42,
+)
+```
+
+#### Methods
+
+- `fit(X, y) -> self`
+- `transform(X) -> pd.DataFrame`
+- `fit_transform(X, y) -> pd.DataFrame`
+- `get_support(indices=False) -> np.ndarray`
+- `get_feature_names_out() -> list[str]`
+- `get_selection_result() -> SelectionResult`
+
+### Fitted attributes
+
+- `support_`: bool mask for selected features
+- `ranking_`: 1 = selected, higher = eliminated earlier
+- `feature_names_`: list of all feature names
+- `n_features_`: total feature count
+- `n_features_selected_`: number of selected features
+- `importance_history_`: per-iteration feature importances, within-iteration rank, and selected indicator
+
+### Quick example
+
+```python
+import pandas as pd
+from catboost_utility.rfe_catboost import CatBoostRFE
+
+X = pd.DataFrame({
+    "age": [34, 27, 52, 41, 29, 38],
+    "income": [70_000, 42_000, 110_000, 87_000, 50_000, 76_000],
+    "city": ["A", "B", "A", "C", "B", "A"],
+    "segment": ["retail", "retail", "enterprise", "enterprise", "retail", "enterprise"],
+})
+y = pd.Series([0, 0, 1, 1, 0, 1], name="target")
+
+rfe = CatBoostRFE(
+    n_features_to_select=2,
+    cat_features=["city", "segment"],
+    random_state=42,
+)
+rfe.fit(X, y)
+print(rfe.get_feature_names_out())
+print(rfe.ranking_)
+print(rfe.importance_history_.head())
+```
+
+### Edge-case behavior
+
+- If `n_features_to_select >= total features`, all features are returned with rank 1.
+- If `n_features_to_select` is `None`, defaults to `max(1, n_features // 2)`.
+- Float `step` removes that fraction of remaining features per iteration (minimum 1).
+- Rows with null targets are dropped with a warning.
+- Categorical features are auto-detected from dtype (object, string, category, bool) or specified explicitly via `cat_features`.
+
+---
+
 ## Shared infrastructure (`common/`)
 
 ### Validation (`validation.py`)
@@ -645,7 +737,8 @@ Use when your goal is identifying all relevant predictors for a specific target.
 
 1. Use `BorutaCatBoost` to remove clearly irrelevant features.
 2. Use `CatBoostVIF.fit_eliminate()` to reduce redundancy among retained features.
-3. Train your final predictive model on the reduced set.
+3. Use `CatBoostRFE` to select the top-N features for your final model.
+4. Train your final predictive model on the reduced set.
 
 ---
 
@@ -660,16 +753,15 @@ python -m pytest -v --tb=short
 To target the module test directories explicitly:
 
 ```bash
-python -m pytest catboost_utility/vif_catboost/tests catboost_utility/boruta_catboost/tests -v --tb=short
+python -m pytest catboost_utility/vif_catboost/tests catboost_utility/boruta_catboost/tests catboost_utility/rfe_catboost/tests -v --tb=short
 ```
 
 ---
 
 ## Roadmap
 
-Planned post-v0.1.0 modules include:
+Planned post-v0.2.0 modules include:
 
-- CatBoost RFE
 - permutation importance utilities
 - stability selection
 - calibration and threshold optimization

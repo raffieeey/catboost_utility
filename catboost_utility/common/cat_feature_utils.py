@@ -97,7 +97,12 @@ def _auto_detect_cat_features(X: pd.DataFrame) -> list[str]:
     cat_cols = []
     for col in X.columns:
         dtype = X[col].dtype
-        if is_object_dtype(dtype) or isinstance(dtype, CategoricalDtype) or is_bool_dtype(dtype):
+        if (
+            is_object_dtype(dtype)
+            or isinstance(dtype, CategoricalDtype)
+            or is_bool_dtype(dtype)
+            or pd.api.types.is_string_dtype(dtype)
+        ):
             cat_cols.append(col)
     return cat_cols
 
